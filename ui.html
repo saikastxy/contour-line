@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: Inter, system-ui, -apple-system, sans-serif;
+      font-size: 11px;
+      color: #333;
+      padding: 16px;
+      background: #fff;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .section {
+      margin-bottom: 14px;
+    }
+    .section label {
+      display: block;
+      font-weight: 500;
+      margin-bottom: 4px;
+      color: #555;
+    }
+    .section .hint {
+      font-size: 10px;
+      color: #999;
+      margin-top: 2px;
+      margin-bottom: 0;
+    }
+    input[type="range"] {
+      width: 100%;
+      margin: 4px 0;
+    }
+    .range-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .range-row input[type="range"] { flex: 1; }
+    .range-row .value {
+      width: 36px;
+      text-align: right;
+      font-size: 11px;
+      font-weight: 500;
+      color: #333;
+    }
+    input[type="color"] {
+      width: 32px;
+      height: 24px;
+      border: 1px solid #ddd;
+      border-radius: 3px;
+      cursor: pointer;
+      padding: 1px;
+    }
+    .color-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .color-hex {
+      font-size: 11px;
+      color: #555;
+      font-family: monospace;
+    }
+    #selection-info {
+      background: #f5f5f5;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 11px;
+      color: #333;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #selection-info .icon {
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+      background: #ddd;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+    }
+    #selection-info .name { font-weight: 500; }
+    #selection-info .none { color: #999; font-style: italic; }
+
+    #generate-btn {
+      width: 100%;
+      padding: 10px;
+      background: #18a0fb;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 6px;
+    }
+    #generate-btn:hover { background: #0d8de0; }
+    #generate-btn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    #status {
+      text-align: center;
+      font-size: 11px;
+      color: #999;
+      margin-top: 10px;
+      min-height: 16px;
+    }
+    #status.error { color: #e03e3e; }
+    #status.success { color: #2ea043; }
+
+    .progress-bar {
+      width: 100%;
+      height: 4px;
+      background: #eee;
+      border-radius: 2px;
+      margin-top: 8px;
+      overflow: hidden;
+      display: none;
+    }
+    .progress-bar .fill {
+      height: 100%;
+      background: #18a0fb;
+      border-radius: 2px;
+      transition: width 0.15s;
+    }
+  </style>
+</head>
+<body>
+
+<div id="selection-info">
+  <span class="icon">&#9633;</span>
+  <span class="name" id="sel-name"><span class="none">未选中任何图层</span></span>
+</div>
+
+<div class="section">
+  <label>等高线层数</label>
+  <div class="range-row">
+    <input type="range" id="levels" min="5" max="200" value="50" step="1">
+    <span class="value" id="levels-val">50</span>
+  </div>
+  <p class="hint">生成的等高线总条数</p>
+</div>
+
+<div class="section">
+  <label>暗部密度偏向</label>
+  <div class="range-row">
+    <input type="range" id="bias" min="0" max="3" value="1" step="0.1">
+    <span class="value" id="bias-val">1.0</span>
+  </div>
+  <p class="hint">0=均匀分布 &nbsp; 1=暗部更密 &nbsp; 3=极度偏向暗部</p>
+</div>
+
+<div class="section">
+  <label>平滑度</label>
+  <div class="range-row">
+    <input type="range" id="smoothing" min="0" max="0.6" value="0.33" step="0.01">
+    <span class="value" id="smoothing-val">0.33</span>
+  </div>
+  <p class="hint">0=尖锐折线 &nbsp; 0.33=自然平滑 &nbsp; 0.6=极度圆滑</p>
+</div>
+
+<div class="section">
+  <label>描边宽度</label>
+  <div class="range-row">
+    <input type="range" id="strokeWidth" min="0.5" max="5" value="1" step="0.5">
+    <span class="value" id="strokeWidth-val">1</span>
+  </div>
+</div>
+
+<div class="section">
+  <label>描边颜色</label>
+  <div class="color-row">
+    <input type="color" id="strokeColor" value="#000000">
+    <span class="color-hex" id="color-hex">#000000</span>
+  </div>
+</div>
+
+<div class="section">
+  <label>采样精度</label>
+  <div class="range-row">
+    <input type="range" id="resolution" min="50" max="500" value="200" step="10">
+    <span class="value" id="resolution-val">200</span>
+  </div>
+  <p class="hint">高精度 = 更多细节，但速度较慢</p>
+</div>
+
+<button id="generate-btn">生成等高线</button>
+
+<div class="progress-bar" id="progress-bar">
+  <div class="fill" id="progress-fill"></div>
+</div>
+<div id="status"></div>
+
+<script>
+  // --- UI state sync ---
+  const $ = (id) => document.getElementById(id);
+
+  function bindSlider(id) {
+    const slider = $(id);
+    const display = $(id + '-val');
+    slider.addEventListener('input', () => {
+      display.textContent = parseFloat(slider.value).toFixed(
+        slider.step.includes('.') ? (slider.step.split('.')[1]?.length || 1) : 0
+      );
+      if (id === 'strokeWidth') display.textContent = parseFloat(slider.value).toFixed(1);
+    });
+  }
+  ['levels', 'bias', 'smoothing', 'strokeWidth', 'resolution'].forEach(bindSlider);
+
+  // Sync color hex display
+  const colorInput = $('strokeColor');
+  const colorHex = $('color-hex');
+  colorInput.addEventListener('input', () => {
+    colorHex.textContent = colorInput.value;
+  });
+
+  // --- Send generate command ---
+  $('generate-btn').addEventListener('click', () => {
+    const params = {
+      levels: parseInt($('levels').value),
+      bias: parseFloat($('bias').value),
+      smoothing: parseFloat($('smoothing').value),
+      strokeWidth: parseFloat($('strokeWidth').value),
+      strokeColor: $('strokeColor').value,
+      resolution: parseInt($('resolution').value),
+    };
+    parent.postMessage({ pluginMessage: { type: 'generate', params } }, '*');
+    $('generate-btn').disabled = true;
+    $('status').textContent = '处理中...';
+    $('status').className = '';
+    $('progress-bar').style.display = 'block';
+    $('progress-fill').style.width = '0%';
+  });
+
+  // --- Image decode helper (called when plugin sends raw bytes) ---
+  window._decodeImage = async function(bytes, cols, rows) {
+    try {
+      const blob = new Blob([bytes], { type: 'image/png' });
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = () => reject(new Error('图片解码失败'));
+        img.src = url;
+      });
+      URL.revokeObjectURL(url);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('无法创建 Canvas 上下文');
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, img.width, img.height);
+      const pixels = imageData.data;
+
+      // Bilinear sample at grid positions
+      const brightness = [];
+      for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+          const fx = (col / (cols - 1)) * (img.width - 1);
+          const fy = (row / (rows - 1)) * (img.height - 1);
+
+          const ix = Math.floor(fx);
+          const iy = Math.floor(fy);
+          const wx = fx - ix;
+          const wy = fy - iy;
+
+          const x0 = Math.max(0, Math.min(ix, img.width - 1));
+          const x1 = Math.max(0, Math.min(ix + 1, img.width - 1));
+          const y0 = Math.max(0, Math.min(iy, img.height - 1));
+          const y1 = Math.max(0, Math.min(iy + 1, img.height - 1));
+
+          const sample = (x, y) => {
+            const idx = (y * img.width + x) * 4;
+            const r = pixels[idx] / 255;
+            const g = pixels[idx + 1] / 255;
+            const b = pixels[idx + 2] / 255;
+            return 0.299 * r + 0.587 * g + 0.114 * b;
+          };
+
+          const v00 = sample(x0, y0);
+          const v10 = sample(x1, y0);
+          const v01 = sample(x0, y1);
+          const v11 = sample(x1, y1);
+
+          const v0 = v00 * (1 - wx) + v10 * wx;
+          const v1 = v01 * (1 - wx) + v11 * wx;
+          brightness.push(v0 * (1 - wy) + v1 * wy);
+        }
+      }
+
+      parent.postMessage({
+        pluginMessage: {
+          type: 'image-decoded',
+          brightness,
+          cols,
+          rows,
+        }
+      }, '*');
+    } catch (e) {
+      parent.postMessage({
+        pluginMessage: {
+          type: 'image-decode-error',
+          message: e.message || '图片解码失败',
+        }
+      }, '*');
+    }
+  };
+
+  // --- Handle messages from plugin ---
+  onmessage = (event) => {
+    const msg = event.data.pluginMessage;
+    if (!msg) return;
+
+    switch (msg.type) {
+      case 'selection-changed':
+        $('sel-name').innerHTML = msg.nodeName
+          ? msg.nodeName + ' <span style="color:#999;font-weight:400">(' + msg.nodeType + ')</span>'
+          : '<span class="none">未选中任何图层</span>';
+        break;
+
+      case 'decode-image':
+        window._decodeImage(msg.bytes, msg.cols, msg.rows);
+        break;
+
+      case 'image-decode-error':
+        // Forwarded from _decodeImage catch
+        // (already sent to plugin via parent.postMessage, this is just for UI status)
+        break;
+
+      case 'progress':
+        $('status').textContent = msg.message;
+        $('status').className = '';
+        $('progress-fill').style.width = msg.percent + '%';
+        break;
+
+      case 'complete':
+        $('status').textContent = msg.message || '等高线生成完成';
+        $('status').className = 'success';
+        $('progress-fill').style.width = '100%';
+        $('generate-btn').disabled = false;
+        setTimeout(() => {
+          $('progress-bar').style.display = 'none';
+        }, 1200);
+        break;
+
+      case 'error':
+        $('status').textContent = msg.message;
+        $('status').className = 'error';
+        $('progress-bar').style.display = 'none';
+        $('generate-btn').disabled = false;
+        break;
+    }
+  };
+</script>
+</body>
+</html>
