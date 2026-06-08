@@ -390,6 +390,79 @@ function deduplicatePoints(points, closed, minDist) {
     }
     return result;
 }
+// ==================== POLYLINE SIMPLIFICATION ====================
+// Ramer-Douglas-Peucker — reduces vertices while preserving shape.
+// Eliminates the grid-quantised noise that causes Catmull-Rom oscillations.
+function simplifyPolyline(points, closed, epsilon) {
+    if (points.length <= 2)
+        return points;
+    if (closed) {
+        // Split the closed loop into two open chains at the farthest pair,
+        // simplify each, then rejoin.
+        let maxD = 0, maxI = 0;
+        for (let i = 1; i < points.length; i++) {
+            const d = distSq(points[0], points[i]);
+            if (d > maxD) {
+                maxD = d;
+                maxI = i;
+            }
+        }
+        const chain1 = points.slice(0, maxI + 1);
+        const chain2 = points.slice(maxI).concat([points[0]]);
+        const simp1 = rdpRecursive(chain1, 0, chain1.length - 1, epsilon);
+        const simp2 = rdpRecursive(chain2, 0, chain2.length - 1, epsilon);
+        // Merge, skipping the duplicate seam points
+        const result = [...simp1];
+        for (let i = 1; i < simp2.length - 1; i++) {
+            result.push(simp2[i]);
+        }
+        return result;
+    }
+    return rdpRecursive(points, 0, points.length - 1, epsilon);
+}
+function distSq(a, b) {
+    return (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+}
+function rdpRecursive(points, start, end, epsilon) {
+    if (end - start <= 1) {
+        return [points[start], points[end]];
+    }
+    let maxDist = 0, maxIdx = start;
+    const dx = points[end].x - points[start].x;
+    const dy = points[end].y - points[start].y;
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq < 1e-14) {
+        // Degenerate segment — use perpendicular distance from origin
+        for (let i = start + 1; i < end; i++) {
+            const d = distSq(points[i], points[start]);
+            if (d > maxDist) {
+                maxDist = d;
+                maxIdx = i;
+            }
+        }
+    }
+    else {
+        const invLen = 1 / Math.sqrt(lenSq);
+        for (let i = start + 1; i < end; i++) {
+            // Perpendicular distance from point i to line start→end
+            const cross = Math.abs((points[i].x - points[start].x) * dy -
+                (points[i].y - points[start].y) * dx);
+            const d = cross * invLen;
+            if (d > maxDist) {
+                maxDist = d;
+                maxIdx = i;
+            }
+        }
+    }
+    if (maxDist <= epsilon) {
+        return [points[start], points[end]];
+    }
+    const left = rdpRecursive(points, start, maxIdx, epsilon);
+    const right = rdpRecursive(points, maxIdx, end, epsilon);
+    // Merge, skipping the shared middle point
+    const result = left.slice(0, -1).concat(right);
+    return result;
+}
 // ==================== SMOOTHING ====================
 function computeTangents(points, closed, tension) {
     const m = points.length;
@@ -522,6 +595,11 @@ async function generateContours(node, params) {
     };
     const strokeColor = hexToRgb(params.strokeColor);
     const allVectorNodes = [];
+    // RDP epsilon: half a grid cell — simplifies away quantisation noise
+    // without losing real detail
+    const cellW = field.bounds.width / (field.width - 1);
+    const cellH = field.bounds.height / (field.height - 1);
+    const simplifyEpsilon = Math.min(cellW, cellH) * 0.5;
     for (let li = 0; li < allPolylines.length; li++) {
         const { threshold, polylines } = allPolylines[li];
         const pct = 65 + ((li / allPolylines.length) * 25);
@@ -535,8 +613,13 @@ async function generateContours(node, params) {
             const cleanPts = deduplicatePoints(pl.points, pl.closed, 0.01);
             if (cleanPts.length < 2)
                 continue;
-            const tangents = computeTangents(cleanPts, pl.closed, params.smoothing);
-            const network = buildVectorNetwork(cleanPts, tangents, pl.closed);
+            // RDP simplification: remove grid-quantised collinear points that
+            // cause Catmull-Rom oscillations (Runge phenomenon)
+            const simplePts = simplifyPolyline(cleanPts, pl.closed, simplifyEpsilon);
+            if (simplePts.length < 2)
+                continue;
+            const tangents = computeTangents(simplePts, pl.closed, params.smoothing);
+            const network = buildVectorNetwork(simplePts, tangents, pl.closed);
             if (network.segments.length === 0)
                 continue;
             const vec = figma.createVector();
