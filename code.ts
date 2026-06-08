@@ -4,6 +4,10 @@
 // using Marching Squares + Catmull-Rom smoothing.
 // ============================================================
 
+// Module-level reference to generated vectors, so the post-generation
+// "optimize curves" toggle can reach them.
+let generatedVectors: VectorNode[] = [];
+
 // ==================== TYPES ====================
 
 interface Point {
@@ -742,7 +746,7 @@ function computeTangents(
 
   // Curvature amplification: at high-curvature points, lengthen tangents
   // so the Catmull-Rom spline bends further with fewer control points.
-  // Uses ANGLE_AND_LENGTH mirroring — both handles scale together.
+  // Uses ANGLE_AND_LENGTH mirroring — handles share direction and length.
   if (curvatureGain > 0) {
     const refAngle = (20 * Math.PI) / 180; // 20° reference for "moderate" curvature
 
@@ -904,7 +908,7 @@ async function generateContours(
   };
 
   const strokeColor = hexToRgb(params.strokeColor);
-  const allVectorNodes: VectorNode[] = [];
+  generatedVectors = [];
 
   // RDP epsilon: half a grid cell — simplifies away quantisation noise
   // without losing real detail
@@ -948,21 +952,24 @@ async function generateContours(
       if (network.segments.length === 0) continue;
 
       const vec = figma.createVector();
-      await vec.setVectorNetworkAsync(network);
-      vec.handleMirroring = "ANGLE_AND_LENGTH";
       vec.fills = [];
       vec.strokes = [{ type: "SOLID", color: strokeColor }];
       vec.strokeWeight = params.strokeWidth;
       vec.strokeCap = "ROUND";
       vec.strokeJoin = "ROUND";
+      await vec.setVectorNetworkAsync(network);
+      // Set handleMirroring AFTER setVectorNetworkAsync — the network
+      // write may carry per-vertex mirroring that resets the node-level
+      // property if set before.
+      vec.handleMirroring = "ANGLE_AND_LENGTH";
       vec.name = `L${li + 1}_${pl.closed ? "closed" : "open"}`;
 
       levelNodes.push(vec);
-      allVectorNodes.push(vec);
+      generatedVectors.push(vec);
     }
   }
 
-  if (allVectorNodes.length === 0) {
+  if (generatedVectors.length === 0) {
     throw new Error(
       `未生成任何等高线（${thresholds.length} 个阈值，明度范围 ${vmin.toFixed(3)}–${vmax.toFixed(3)}），` +
       `请尝试减小平滑度或增大采样精度`
@@ -973,7 +980,7 @@ async function generateContours(
   sendProgress("正在编组...", 92);
 
   // Group all vectors
-  const rootGroup = figma.group(allVectorNodes, figma.currentPage);
+  const rootGroup = figma.group(generatedVectors, figma.currentPage);
   rootGroup.name = "Contour Lines";
 
   // Center view on the result
@@ -981,6 +988,22 @@ async function generateContours(
   figma.viewport.scrollAndZoomIntoView([rootGroup]);
 
   sendProgress("完成", 100);
+
+  // --- Phase 6: Deferred cache rebuild ---
+  // Figma lazily caches VectorNetwork bezier evaluation. Even though our
+  // tangents already satisfy ANGLE_AND_LENGTH, the initial render uses
+  // stale cached handles. After a brief delay (to let the first render
+  // commit), toggle mirroring to force a cache rebuild — same effect as
+  // the user clicking "优化曲线", just automated.
+  await delay(300);
+  for (const vec of generatedVectors) {
+    vec.handleMirroring = "NONE";
+    vec.handleMirroring = "ANGLE_AND_LENGTH";
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function sendProgress(message: string, percent: number) {
@@ -1052,5 +1075,25 @@ figma.ui.onmessage = async (msg: any) => {
       decodePromise.reject(new Error(msg.message));
       decodePromise = null;
     }
+  }
+
+  if (msg.type === "optimize-curves") {
+    if (generatedVectors.length === 0) {
+      figma.ui.postMessage({
+        type: "optimize-done",
+        message: "没有可优化的曲线",
+      });
+      return;
+    }
+    // Toggle handleMirroring to force Figma to recalculate tangent handles,
+    // equivalent to manually switching the property in the UI.
+    for (const vec of generatedVectors) {
+      vec.handleMirroring = "NONE";
+      vec.handleMirroring = "ANGLE_AND_LENGTH";
+    }
+    figma.ui.postMessage({
+      type: "optimize-done",
+      message: "曲线优化完成",
+    });
   }
 };

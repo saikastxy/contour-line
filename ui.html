@@ -105,6 +105,25 @@
       cursor: not-allowed;
     }
 
+    #optimize-btn {
+      width: 100%;
+      padding: 8px;
+      background: #fff;
+      color: #18a0fb;
+      border: 1px solid #18a0fb;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      margin-top: 6px;
+      display: none;
+    }
+    #optimize-btn:hover { background: #e8f4fd; }
+    #optimize-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
     #status {
       text-align: center;
       font-size: 11px;
@@ -192,6 +211,7 @@
 </div>
 
 <button id="generate-btn">生成等高线</button>
+<button id="optimize-btn">优化曲线</button>
 
 <div class="progress-bar" id="progress-bar">
   <div class="fill" id="progress-fill"></div>
@@ -237,6 +257,14 @@
     $('status').className = '';
     $('progress-bar').style.display = 'block';
     $('progress-fill').style.width = '0%';
+    $('optimize-btn').style.display = 'none';
+  });
+
+  // --- Send optimize command ---
+  $('optimize-btn').addEventListener('click', () => {
+    parent.postMessage({ pluginMessage: { type: 'optimize-curves' } }, '*');
+    $('optimize-btn').disabled = true;
+    $('optimize-btn').textContent = '优化中...';
   });
 
   // --- Image decode helper (called when plugin sends raw bytes) ---
@@ -347,9 +375,19 @@
         $('status').className = 'success';
         $('progress-fill').style.width = '100%';
         $('generate-btn').disabled = false;
+        $('optimize-btn').style.display = 'block';
+        $('optimize-btn').disabled = false;
+        $('optimize-btn').textContent = '优化曲线';
         setTimeout(() => {
           $('progress-bar').style.display = 'none';
         }, 1200);
+        break;
+
+      case 'optimize-done':
+        $('status').textContent = msg.message || '曲线优化完成';
+        $('status').className = 'success';
+        $('optimize-btn').disabled = false;
+        $('optimize-btn').textContent = '优化曲线';
         break;
 
       case 'error':
