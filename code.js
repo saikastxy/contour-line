@@ -463,8 +463,81 @@ function rdpRecursive(points, start, end, epsilon) {
     const result = left.slice(0, -1).concat(right);
     return result;
 }
+// ==================== CURVATURE JITTER FILTER ====================
+// After RDP, grid-quantised zigzag patterns may survive in dense regions.
+// Instead of a blunt angle threshold, this version detects the *pattern*:
+// jitter alternates turn direction (+ - + -), while a genuine curve keeps
+// a consistent direction (++++ or ----). Only points whose turn direction
+// flips relative to BOTH neighbours are candidates, and even then only if
+// skipping them yields a straighter trajectory.
+function filterJitter(points, closed, minAngleDeg) {
+    const n = points.length;
+    if (n <= 3)
+        return points;
+    // ---- pass 1: compute signed turn direction & magnitude for every interior point ----
+    const dirs = new Array(n).fill(0); // +1 left, -1 right, 0 straight
+    const minRad = (minAngleDeg * Math.PI) / 180;
+    for (let i = 0; i < n; i++) {
+        if (!closed && (i === 0 || i === n - 1))
+            continue;
+        const prev = points[(i - 1 + n) % n];
+        const curr = points[i];
+        const next = points[(i + 1) % n];
+        const d1x = curr.x - prev.x;
+        const d1y = curr.y - prev.y;
+        const d2x = next.x - curr.x;
+        const d2y = next.y - curr.y;
+        const cross = d1x * d2y - d1y * d2x;
+        const dot = d1x * d2x + d1y * d2y;
+        const mag = Math.abs(Math.atan2(cross, dot));
+        if (mag >= minRad) {
+            dirs[i] = cross > 0 ? 1 : -1;
+        }
+    }
+    // ---- pass 2: flag zigzag pivots ----
+    // A point is a zigzag pivot when its direction is opposite BOTH neighbours'
+    // directions (isolated flip). Points on a consistent curve will share the
+    // same direction with at least one neighbour → never flagged.
+    const remove = new Array(n).fill(false);
+    for (let i = 0; i < n; i++) {
+        if (!closed && (i === 0 || i === n - 1))
+            continue;
+        if (dirs[i] === 0)
+            continue; // turn too small to matter
+        const prevDir = dirs[(i - 1 + n) % n];
+        const nextDir = dirs[(i + 1) % n];
+        // Isolated flip: my sign opposes BOTH neighbours (and both are non-zero)
+        if (prevDir !== 0 && prevDir === -dirs[i] &&
+            nextDir !== 0 && nextDir === -dirs[i]) {
+            // Confirm: would skipping this point yield a gentler trajectory?
+            const prev = points[(i - 1 + n) % n];
+            const curr = points[i];
+            const next = points[(i + 1) % n];
+            const dInX = curr.x - prev.x;
+            const dInY = curr.y - prev.y;
+            const dOutX = next.x - curr.x;
+            const dOutY = next.y - curr.y;
+            const lenIn = Math.sqrt(dInX * dInX + dInY * dInY);
+            const lenOut = Math.sqrt(dOutX * dOutX + dOutY * dOutY);
+            if (lenIn < 1e-12 || lenOut < 1e-12)
+                continue;
+            const dSkipX = next.x - prev.x;
+            const dSkipY = next.y - prev.y;
+            const lenSkip = Math.sqrt(dSkipX * dSkipX + dSkipY * dSkipY);
+            if (lenSkip < 1e-12)
+                continue;
+            // cos(turn) with current point  vs  cos without it
+            const cosTurn = (dInX * dOutX + dInY * dOutY) / (lenIn * lenOut);
+            const cosSkip = (dInX * dSkipX + dInY * dSkipY) / (lenIn * lenSkip);
+            if (cosSkip > cosTurn) {
+                remove[i] = true;
+            }
+        }
+    }
+    return points.filter((_, i) => !remove[i]);
+}
 // ==================== SMOOTHING ====================
-function computeTangents(points, closed, tension) {
+function computeTangents(points, closed, tension, curvatureGain = 0) {
     const m = points.length;
     if (m < 2)
         return points.map(() => ({ x: 0, y: 0 }));
@@ -495,6 +568,31 @@ function computeTangents(points, closed, tension) {
             }
         }
         tangents.push({ x: tx * tension, y: ty * tension });
+    }
+    // Curvature amplification: at high-curvature points, lengthen tangents
+    // so the Catmull-Rom spline bends further with fewer control points.
+    // Uses ANGLE_AND_LENGTH mirroring — both handles scale together.
+    if (curvatureGain > 0) {
+        const refAngle = (20 * Math.PI) / 180; // 20° reference for "moderate" curvature
+        for (let i = 0; i < m; i++) {
+            if (!closed && (i === 0 || i === m - 1))
+                continue;
+            const prev = points[(i - 1 + m) % m];
+            const curr = points[i];
+            const next = points[(i + 1) % m];
+            const d1x = curr.x - prev.x;
+            const d1y = curr.y - prev.y;
+            const d2x = next.x - curr.x;
+            const d2y = next.y - curr.y;
+            const cross = d1x * d2y - d1y * d2x;
+            const dot = d1x * d2x + d1y * d2y;
+            const turnAngle = Math.abs(Math.atan2(cross, dot));
+            if (turnAngle > 0.001) {
+                const gain = 1 + (turnAngle / refAngle) * curvatureGain;
+                tangents[i].x *= gain;
+                tangents[i].y *= gain;
+            }
+        }
     }
     return tangents;
 }
@@ -618,8 +716,14 @@ async function generateContours(node, params) {
             const simplePts = simplifyPolyline(cleanPts, pl.closed, simplifyEpsilon);
             if (simplePts.length < 2)
                 continue;
-            const tangents = computeTangents(simplePts, pl.closed, params.smoothing);
-            const network = buildVectorNetwork(simplePts, tangents, pl.closed);
+            // Curvature jitter filter: detect zigzag direction flips (isolated
+            // +-+ or -+- patterns). Ignores turns < 8° (too straight to matter)
+            // and never touches points on a consistent curve.
+            const smoothPts = filterJitter(simplePts, pl.closed, 8);
+            if (smoothPts.length < 2)
+                continue;
+            const tangents = computeTangents(smoothPts, pl.closed, params.smoothing, 0.5);
+            const network = buildVectorNetwork(smoothPts, tangents, pl.closed);
             if (network.segments.length === 0)
                 continue;
             const vec = figma.createVector();
